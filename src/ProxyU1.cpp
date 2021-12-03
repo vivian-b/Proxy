@@ -29,6 +29,18 @@
     
 // */
 
+void locationCallback(float lat1, float lon1, float accuracy);
+float calculateDistance(float lat1, float lon1, float lat2, float lon2);
+void setup();
+void loop();
+#line 26 "/Users/vivian/Documents/ProxyU/src/ProxyU1.ino"
+SYSTEM_THREAD(ENABLED);
+SerialLogHandler logHandler;
+
+// uint32_t lastTime = 0;
+std::chrono::milliseconds publishPeriod = 10s;
+unsigned long lastPublishMs;
+
 // library for the Adafruit NeoPixel Jewel 
 // link: https://github.com/adafruit/Adafruit_NeoPixel
 #include <neopixel.h>
@@ -38,11 +50,6 @@
 #include <google-maps-device-locator.h>
 
 // Locator object as a global variable in the program:
-void locationCallback(float lat1, float lon1, float accuracy);
-float calculateDistance(float lat1, float lon1, float lat2, float lon2);
-void setup();
-void loop();
-#line 35 "/Users/vivian/Documents/ProxyU/src/ProxyU1.ino"
 GoogleMapsDeviceLocator locator;
 
 // Track location of the device
@@ -79,22 +86,27 @@ Adafruit_NeoPixel pixels = Adafruit_NeoPixel(7, D6, SK6812RGBW);
 
 int photoSens = A4; // Analog 5: Photocell
 int tiltSens = A2; // A2: Tilt Ball Switch
-int buzzSens = D3; // Digital 3: Buzz
+int buzzSens = D6; // Digital 3: Buzz
 
 // Define values
 
 int resVal=0;  // store the value of the photocell
 
+// Define states
 int resMode= 0;
 int colorMode = 0;
+int lightMode =0;
 
+int lastTiltState = 0;     
+int tiltState  = 0;
+
+// define other particle's state
 int resModeBeta= 0;
 int colorModeBeta = 0;
+int lightModeBeta = 0;
 
-int lastButtonState = 0;     
-int buttonState  = 0;
 
-// set up the pins & subscriptions
+// Set up the pins & subscriptions
 void setup() 
 {
 Serial.begin(9600);
@@ -102,142 +114,148 @@ pixels.begin();
 
 pinMode(photoSens, INPUT);
 pinMode(buzzSens, OUTPUT);
-pinMode(tiltSens, INPUT_PULLUP);
+pinMode(tiltSens, INPUT);
 
-
-void alphaHandler1(const char *event, const char *data); 
-void alphaHandler2(const char *event, const char *data); 
-void alphaHandler3(const char *event, const char *data); 
-void alphaHandler4(const char *event, const char *data); 
-
+// functions reacting to the subscribe events
 Particle.subscribe("betaOnline", alphaHandler1);
+void alphaHandler1(const char *event, const char *data); 
+
 Particle.subscribe("betaColor", alphaHandler2);
-Particle.subscribe("betaLighting", alphaHandler3);
+void alphaHandler2(const char *event, const char *data); 
+
+Particle.subscribe("betaLight", alphaHandler3);
+void alphaHandler3(const char *event, const char *data); 
+
 Particle.subscribe("betaLocate", alphaHandler4);
+void alphaHandler4(const char *event, const char *data); 
 
 locator.withSubscribe(locationCallback);
 } 
 
 void loop(){
 
-if (Particle.connected()) {
-Particle.publish("alphaOnline", "on");
-} 
-if (Particle.disconnected()) {
-Particle.publish("alphaOnline", "off");
-}
 
-resVal=analogRead(photoSens);
-// 
-// 
-// 
+//repeats publish every 30s
+ if (millis() - lastPublishMs >= publishPeriod.count())
+    {
+    lastPublishMs = millis();
 
-if (300 < resVal){
-    // pixels.Color takes RGB values, from 0,0,0 up to 255,255,255
-  	pixels.setPixelColor(1, pixels.Color(10,0,0,0)); // Moderately bright green color.
+    if (Particle.connected())
+        {
+            Particle.publish("alphaOnline", "on");
+    Particle.publish("alphaColor", String(colorMode));
+    Particle.publish("alphaLight", String(lightMode));
 
-        pixels.show();
+        } 
+    }
 
-Particle.publish("lighting1", String(resVal));
+// Sensor Functions
 
-    pixels.show();
+// Photo Cell sensor interaction
+// [Photo Cell] reads the value and publishes the result to the cloud
+  resVal=analogRead(photoSens);
+
+if (3100 < resVal){
+  	pixels.setPixelColor(1, pixels.Color(5,0,0,0)); // Moderately bright green color.
+    lightMode = 2;
   }
-  else if (100 < resVal){
-    // pixels.Color takes RGB values, from 0,0,0 up to 255,255,255
-  	pixels.setPixelColor(1, pixels.Color(0,10,0,0)); // Moderately bright green color.
-        pixels.show();
+  else if (600 < resVal){
+  	pixels.setPixelColor(1, pixels.Color(0,5,0,0)); // Moderately bright green color.
+    lightMode = 1;
 
-    Particle.publish("lighting2", String(resVal));
-    pixels.show();
-  }
-  else
-  {
-    // pixels.Color takes RGB values, from 0,0,0 up to 255,255,255
-  	pixels.setPixelColor(1, pixels.Color(0,0,10,0)); // Moderately bright green color.
-        pixels.show();
-
-    Particle.publish("lighting3", String(resVal));
-
-    pixels.show();
+  } else if (99 > resVal) {
+  	pixels.setPixelColor(1, pixels.Color(0,0,5,0)); // Moderately bright green color.
+    lightMode = 0;
   }
 
-buttonState = digitalRead(tiltSens);
+// [Photo Cell] compares value to other particle to see if it matches
+   if ((lightModeBeta = 0) && (lightMode == 0)){
+      	pixels.setPixelColor(4, pixels.Color(5,0,0,0));
 
-    if (buttonState != lastButtonState) {
-       Serial.println(colorMode);
+  } else if ((lightModeBeta = 1) && (lightMode == 1)){
+      	pixels.setPixelColor(4, pixels.Color(0,5,0,0));
 
-     if ((digitalRead(tiltSens) == HIGH) ||(digitalRead(tiltSens) == LOW) ) { 
+  } else if ((lightModeBeta = 2) && (lightMode == 2)){
+      	pixels.setPixelColor(4, pixels.Color(0,0,5,0));
+  }
 
-    if (colorMode < 6) { //until it reaches the last mode, cycle to the next mode
+// Tilt sensor interaction
+// [Tilt sensor] reads whenever the tilt sensor activates
+tiltState = digitalRead(tiltSens);
+tone(buzzSens, 1000, 10);
+
+    if (tiltState != lastTiltState) {
+    // Particle.publish("alphaColor", String(colorMode));
+
+    if ((digitalRead(tiltSens) == HIGH) ||(digitalRead(tiltSens) == LOW) ) { 
+    if (colorMode < 5) { //until it reaches the last mode, cycle to the next mode
       colorMode = colorMode + 1;
 
     } else {
       colorMode = 0; // after the last mode, cycle backs to first mode 
     }
   }
-      lastButtonState = buttonState; //upade state out of loop
+      lastTiltState = tiltState; //upade state out of loop
     } 
 
-switch (colorMode)
-{
+// Color states to change the pixel display
+switch (colorMode) {
   case 0:
-   	pixels.setPixelColor(2, pixels.Color(100,0,0));
-
+   	pixels.setPixelColor(2, pixels.Color(5,0,0,0));
   break;
   case 1:
-    	pixels.setPixelColor(2, pixels.Color(0,100,0));
-
+    	pixels.setPixelColor(2, pixels.Color(0,5,0,0));
   break;
   case 2:
-   	pixels.setPixelColor(2, pixels.Color(0,0,100)); 
-
+   	pixels.setPixelColor(2, pixels.Color(0,0,5,0)); 
   break;
   case 3:
-    	pixels.setPixelColor(2, pixels.Color(100,0,100));
-
-  break;   
-   case 4:
-    	pixels.setPixelColor(2, pixels.Color(0,100,100));
-
+    pixels.setPixelColor(2, pixels.Color(2,0,3,0));
   break; 
-    case 5:
-    	pixels.setPixelColor(2, pixels.Color(100,100,0));
-
+    case 4:
+    	pixels.setPixelColor(2, pixels.Color(2,3,0,0));
   break;
 }
   
+  // [Tilt sensor] compares the given color to the other particle
   if ((colorMode == 0) && (colorModeBeta == 0)){
-      	pixels.setPixelColor(3, pixels.Color(100,0,0));
+      	pixels.setPixelColor(3, pixels.Color(5,0,0,0));
 
   } else if ((colorMode == 1) && (colorModeBeta == 1)){
-        	pixels.setPixelColor(3, pixels.Color(0,100,0));
+      	pixels.setPixelColor(3, pixels.Color(0,5,0,0));
 
   } else if ((colorMode == 2) && (colorModeBeta == 2)){
-        	pixels.setPixelColor(3, pixels.Color(0,0,100));
+      	pixels.setPixelColor(3, pixels.Color(0,0,5,0));
 
   }  else if ((colorMode == 3) && (colorModeBeta == 3)){
-        	pixels.setPixelColor(3, pixels.Color(100,0,100));
+      	pixels.setPixelColor(3, pixels.Color(2,0,3,0));
 
-  } else if ((colorMode == 4) && (colorModeBeta == 2)){
-        	pixels.setPixelColor(3, pixels.Color(200,100,200));
+  } else if ((colorMode == 4) && (colorModeBeta == 4)){
+      	pixels.setPixelColor(3, pixels.Color(2,3,0,0));
 
-  }else {
-          	pixels.setPixelColor(3, pixels.Color(0,100,100));
+  } else {
+      	pixels.setPixelColor(3, pixels.Color(0,0,0,5));
 
-  } 
+  }
+
+// [No Sensor] compares if all the sensors + other particle sensor matches
+
+  //  if ((colorMode == 0) && (colorModeBeta == 0) && (lightModeBeta == 0)) {
+  //        	pixels.setPixelColor(0, pixels.Color(1,2,2,0));
+
+  // }  
 
 // Updates location
     locator.loop();
 }
 
+// Cloud interactions
+// reactions based on the subscriptions to the other particle
 
-
-// Particle.subscribe("betaOnline", alphaHandler1);
+// [First Interaction] Particle.subscribe("betaOnline", alphaHandler1);
 // sound notification when other party goes online
 void alphaHandler1(const char *event, const char *data)
 {
-
-Particle.publish("alphaOnline", "on"); // respond to the other being online
 
 if (strcmp(data, "on") == 0) // -> beta is online
 {
@@ -247,7 +265,6 @@ delay(200);
 tone(buzzSens, 2000, 500);
 delay(200);
 tone(buzzSens, 3000, 200);
-
 } else // -> -> beta goes offline
 {
 //sound notification 
@@ -257,41 +274,46 @@ tone(buzzSens, 1000, 100);
   }
 }
 
-// Particle.subscribe("betaColor", alphaHandler2);
-// updates the color selected from the tilt action from the other party
+// [Second Interaction] Particle.subscribe("betaColor", alphaHandler2);
+// updates the color selected from the tilt action from the other particle
 void alphaHandler2(const char *event, const char *data)
 {
-if (strcmp(data, "1") == 0)
+  if (strcmp(data, "0") == 0)
 {
-  pixels.setPixelColor(5, pixels.Color(2,0,0,1)); 
+  pixels.setPixelColor(5, pixels.Color(5,0,0,0)); 
+colorModeBeta = 0;
+
+  } else if (strcmp(data, "1") == 0)
+{
+  pixels.setPixelColor(5, pixels.Color(0,5,0,0)); 
 colorModeBeta = 1;
 
   } else if (strcmp(data, "2") == 0)
 {
-  pixels.setPixelColor(5, pixels.Color(0,2,0,1)); 
+  pixels.setPixelColor(5, pixels.Color(0,0,5,0)); 
 colorModeBeta = 2;
 
   } else if (strcmp(data, "3") == 0)
 {
-  pixels.setPixelColor(5, pixels.Color(0,0,2,1)); 
+  pixels.setPixelColor(5, pixels.Color(2,0,3,0)); 
 colorModeBeta = 3;
 
   }else if (strcmp(data, "4") == 0)
 {
-  pixels.setPixelColor(5, pixels.Color(2,0,2,1)); 
+  pixels.setPixelColor(5, pixels.Color(2,3,0,0)); 
 colorModeBeta = 4;
 
-  } else
-  {
-  pixels.setPixelColor(5, pixels.Color(0,2,2,0)); 
-colorModeBeta = 5;
+  } 
+//   else
+//   {
+//   pixels.setPixelColor(5, pixels.Color(0,5,5,0)); 
+// colorModeBeta = 5;
 
-  }  
+//   }  
 }
 
-// Particle.subscribe("betaLighting", alphaHandler3);
-// photo resistor value
-
+// [Third Interaction] Particle.subscribe("betaLight", alphaHandler3);
+// updates the value given from the photocell from the other particle
 void alphaHandler3(const char *event, const char *data)
 {
 
@@ -300,27 +322,33 @@ void alphaHandler3(const char *event, const char *data)
   delay(200);
   tone(buzzSens, 900, 500);
 
-if (strcmp(data, "low") == 0)
-  {
-    pixels.setPixelColor(6, pixels.Color(2,0,0,1)); 
-  } else if (strcmp(data, "high") == 0)
-  {
-    pixels.setPixelColor(6, pixels.Color(0,2,0,1)); 
-  } else
-  {
-  pixels.setPixelColor(6, pixels.Color(0,0,2,1)); 
-  }
+ if (strcmp(data, "0") == 0)
+{
+  pixels.setPixelColor(6, pixels.Color(5,0,0,0)); 
+lightModeBeta = 0;
 
+  } else if (strcmp(data, "1") == 0)
+{
+  pixels.setPixelColor(6, pixels.Color(0,5,0,0)); 
+lightModeBeta = 1;
+
+  } else if (strcmp(data, "2") == 0)
+{
+  pixels.setPixelColor(6, pixels.Color(0,0,5,0)); 
+lightModeBeta = 2;
+}
 }
 
-// Particle.subscribe("betaLocate", alphaHandler4);
+// [Fourth Interaction] Particle.subscribe("betaLocate", alphaHandler4);
+// 
+
 void alphaHandler4(const char *event, const char *data)
 {
 locator.publishLocation();
 if (strcmp(data, "far") == 0){
-  pixels.setPixelColor(0, pixels.Color(5,0,5,1)); 
+  pixels.setPixelColor(0, pixels.Color(5,0,5,0)); 
 } else { //near
-  pixels.setPixelColor(0, pixels.Color(0,5,0,1)); 
+  pixels.setPixelColor(0, pixels.Color(0,5,0,0)); 
 }
 
 }
